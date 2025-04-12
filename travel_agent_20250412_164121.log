@@ -1,0 +1,37 @@
+2025-04-12 16:41:21,195 - INFO - === Starting Travel Agent Session ===
+2025-04-12 16:41:27,755 - USER_INPUT: {
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is the weather in Baku, Azerbaijan?"
+    }
+  ]
+}
+2025-04-12 16:41:28,253 - Raw LLM response: ```json
+{"location": "Baku, Azerbaijan"}
+```
+2025-04-12 16:41:28,254 - ROUTER: request=[], location=
+2025-04-12 16:41:28,254 - ROUTER: No specific request found, ending processing
+2025-04-12 16:41:28,255 - ===== DEBUG DUMP OF ALL MESSAGES =====
+2025-04-12 16:41:28,255 - ===== END DEBUG DUMP =====
+2025-04-12 16:41:28,256 - INTERNAL_STATE: {
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is the weather in Baku, Azerbaijan?"
+    },
+    {
+      "role": "assistant",
+      "content": "```json\n{\"location\": \"Baku, Azerbaijan\"}\n```"
+    },
+    {
+      "role": "assistant",
+      "content": "What would you like to do next? (Options: get_weather, find_events, find_places)"
+    }
+  ],
+  "request": [],
+  "finished": false,
+  "user_profile": {},
+  "location": "",
+  "recommendation": {}
+}

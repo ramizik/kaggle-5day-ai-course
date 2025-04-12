@@ -48,8 +48,11 @@ TRAVELAGENT_SYSINT = {
     "You can infer or confirm these preferences from the user's messages and update the user profile accordingly. "
     "Use these preferences along with the current time, location, and weather to tailor your suggestions."
     "\n\n"
+    "IMPORTANT: Do NOT try to generate weather information yourself. For weather queries, simply identify the location and let the system handle the weather retrieval. "
+    "Do not apologize about weather tools not working - the system will get real weather data."
+    "\n\n"
     "The user may ask for specific functions like:\n"
-    "- Getting current weather: call get_weather\n"
+    "- Getting current weather: identify the location only, and let the system handle the actual weather data\n"
     "- Finding events nearby: call find_events\n"
     "- Discovering places: call find_places\n"
     "- Translating or describing text or images: use translate_text or describe_image\n"
@@ -91,6 +94,10 @@ def setup_logging():
     logger = logging.getLogger("travel_agent")
     logger.setLevel(logging.DEBUG)
     
+    # Disable any string truncation in the logger
+    for handler in logging.root.handlers:
+        handler.formatter._style._fmt = '%(asctime)s - %(levelname)s - %(message)s'
+    
     print(f"Logging to {log_filename}")
     logger.info(f"=== Starting Travel Agent Session ===")
     
@@ -108,13 +115,67 @@ def chatbot(state: RequestState) -> RequestState:
         if isinstance(msg, dict) and msg.get("role") == "user":
             user_messages.append(msg.get("content", ""))
     
+    # Check if we've just come from processing a weather request
+    just_processed_weather = state.get("recommendation") and "current_weather" in state.get("recommendation", {})
+    
+    # If we just processed weather, don't add a follow-up question
+    if just_processed_weather:
+        logger.debug("Chatbot detected we just processed weather, returning without additional prompts")
+        return state
+    
+    # Check if this might be a weather request before calling the LLM
+    last_user_message = ""
+    if state["messages"] and isinstance(state["messages"][-1], dict) and state["messages"][-1].get("role") == "user":
+        last_user_message = state["messages"][-1].get("content", "").lower()
+    
+    # Direct weather request pattern matching
+    weather_keywords = ["weather", "temperature", "how cold", "how hot", "climate", "forecast", "rain", "sunny", "cloudy"]
+    weather_request = any(keyword in last_user_message for keyword in weather_keywords)
+    
+    # If it's likely a weather request, try to extract location directly
+    location = None
+    if weather_request:
+        logger.debug("Weather-related keywords found in user message")
+        import re
+        
+        # Common patterns for locations in weather requests
+        location_patterns = [
+            r"weather in ([a-zA-Z\s,]+)(?:\?|$)",
+            r"weather (?:for|at|of) ([a-zA-Z\s,]+)(?:\?|$)",
+            r"temperature in ([a-zA-Z\s,]+)(?:\?|$)",
+            r"how is the weather in ([a-zA-Z\s,]+)(?:\?|$)",
+            r"how's the weather in ([a-zA-Z\s,]+)(?:\?|$)",
+            r"what is the weather in ([a-zA-Z\s,]+)(?:\?|$)",
+            r"what's the weather in ([a-zA-Z\s,]+)(?:\?|$)",
+            r"what is the weather like in ([a-zA-Z\s,]+)(?:\?|$)",
+            r"what's the weather like in ([a-zA-Z\s,]+)(?:\?|$)",
+            r"how is it in ([a-zA-Z\s,]+)(?:\?|$)"
+        ]
+        
+        for pattern in location_patterns:
+            match = re.search(pattern, last_user_message, re.IGNORECASE)
+            if match:
+                location = match.group(1).strip()
+                logger.debug(f"Extracted location directly from user query: {location}")
+                break
+    
+    # If we found a location directly from the user query, route to weather
+    if location:
+        state["location"] = location
+        logger.debug(f"Setting location to {location} and routing to weather directly")
+        return {
+            **state,
+            "request": ["get_weather"],
+            "finished": False
+        }
+    
     # Make sure we use the original message array with proper roles
     message_history = [TRAVELAGENT_SYSINT] + state["messages"]
     
     try:
         response = llm.invoke(message_history)
         response_text = response.content
-        logger.debug(f"Raw LLM response: {response_text[:100]}...")
+        logger.debug(f"Raw LLM response: {response_text}")
         
         # Flag to track if we found a weather request
         weather_found = False
@@ -156,55 +217,59 @@ def chatbot(state: RequestState) -> RequestState:
                 }
         
         # If we reach here, try with JSON parsing as a fallback
-        try:
-            parsed = json.loads(response_text)
-            
-            # Direct field check
-            action = parsed.get("action") or parsed.get("tool_code") or parsed.get("type") or parsed.get("tool_name")
-            location = parsed.get("location")
-            
-            # Check nested parameters
-            if not location and "parameters" in parsed and isinstance(parsed["parameters"], dict):
-                location = parsed["parameters"].get("location")
-            
-            # Check nested response field with a tool_code block
-            if "response" in parsed and isinstance(parsed["response"], str):
-                response_content = parsed["response"]
+        if response_text.strip().startswith('{') and response_text.strip().endswith('}'):
+            try:
+                parsed = json.loads(response_text)
                 
-                # First try to find tool_code block
-                if "tool_code" in response_content:
-                    try:
-                        tool_code_start = response_content.find("tool_code")
-                        json_str = response_content[tool_code_start:].split("```")[0]
-                        # Extract the actual JSON part
-                        if "{" in json_str:
-                            json_part = json_str[json_str.find("{"):].replace("\\\"", "\"")
-                            tool_data = json.loads(json_part)
-                            
-                            # Check tool_data for location
-                            if "location" in tool_data:
-                                location = tool_data["location"]
-                            elif "parameters" in tool_data and "location" in tool_data["parameters"]:
-                                location = tool_data["parameters"]["location"]
-                            
-                            if location:
-                                weather_found = True
-                    except:
-                        logger.debug("Failed to parse tool_code block")
-            
-            # If we found a weather action and location, prep for routing
-            if (action in ["get_weather", "weather"] and location) or weather_found:
-                state["location"] = location
-                logger.debug(f"Setting location to {location} and routing to weather")
-                return {
-                    **state,
-                    "messages": state["messages"] + [{"role": "assistant", "content": response_text}],
-                    "request": ["get_weather"],
-                    "finished": False
-                }
+                # Direct field check
+                action = parsed.get("action") or parsed.get("tool_code") or parsed.get("type") or parsed.get("tool_name")
+                location = parsed.get("location")
                 
-        except json.JSONDecodeError:
-            logger.debug("JSON decode error in main parsing")
+                # Check nested parameters
+                if not location and "parameters" in parsed and isinstance(parsed["parameters"], dict):
+                    location = parsed["parameters"].get("location")
+                
+                # Check nested response field with a tool_code block
+                if "response" in parsed and isinstance(parsed["response"], str):
+                    response_content = parsed["response"]
+                    
+                    # First try to find tool_code block
+                    if "tool_code" in response_content:
+                        try:
+                            tool_code_start = response_content.find("tool_code")
+                            json_str = response_content[tool_code_start:].split("```")[0]
+                            # Extract the actual JSON part
+                            if "{" in json_str:
+                                json_part = json_str[json_str.find("{"):].replace("\\\"", "\"")
+                                tool_data = json.loads(json_part)
+                                
+                                # Check tool_data for location
+                                if "location" in tool_data:
+                                    location = tool_data["location"]
+                                elif "parameters" in tool_data and "location" in tool_data["parameters"]:
+                                    location = tool_data["parameters"]["location"]
+                                
+                                if location:
+                                    weather_found = True
+                        except:
+                            logger.debug("Failed to parse tool_code block")
+                
+                # If we found a weather action and location, prep for routing
+                if (action in ["get_weather", "weather"] and location) or weather_found:
+                    state["location"] = location
+                    logger.debug(f"Setting location to {location} and routing to weather")
+                    return {
+                        **state,
+                        "messages": state["messages"] + [{"role": "assistant", "content": response_text}],
+                        "request": ["get_weather"],
+                        "finished": False
+                    }
+                    
+            except json.JSONDecodeError:
+                # This is expected for natural language responses - not an error condition
+                pass
+            except Exception as e:
+                logger.debug(f"Error parsing LLM response: {str(e)}")
         
         # If we reach here, no weather request was identified
         response_dict = {
@@ -228,20 +293,38 @@ def chatbot(state: RequestState) -> RequestState:
     # Continue with standard processing if no weather request detected
     messages = state["messages"] + [response_dict]
     
-    # Need to check again for action in the response
-    try:
-        parsed = json.loads(response_text)
-        request_type = parsed.get("action") or parsed.get("tool_code") or parsed.get("type")
-    except Exception:
+    # Need to check again for action in the response - but first check if it looks like JSON
+    request_type = None
+    if response_text and response_text.strip().startswith('{') and response_text.strip().endswith('}'):
+        try:
+            parsed = json.loads(response_text)
+            request_type = parsed.get("action") or parsed.get("tool_code") or parsed.get("type")
+        except json.JSONDecodeError:
+            # This is expected for natural language responses - not an error
+            parsed = {}
+        except Exception as e:
+            logger.debug(f"Error parsing response as JSON: {str(e)}")
+            parsed = {}
+    else:
+        # Not JSON format, just regular text - this is normal
         parsed = {}
-        request_type = None
 
+    # Only add follow-up for non-weather requests
     if not request_type:
-        follow_up = {
-            "role": "assistant", 
-            "content": "What would you like to do next? (Options: get_weather, find_events, find_places)"
-        }
-        messages.append(follow_up)
+        # Check if we need to add a follow-up message
+        add_follow_up = True
+        
+        # Don't add if we just processed weather or if we're routing to weather
+        if "get_weather" in state.get("request", []) or just_processed_weather:
+            add_follow_up = False
+        
+        if add_follow_up:
+            follow_up = {
+                "role": "assistant", 
+                "content": "What would you like to do next? (Options: get_weather, find_events, find_places)"
+            }
+            messages.append(follow_up)
+        
         request = []
     else:
         request = [request_type]
@@ -280,16 +363,23 @@ def profile_collector(state: RequestState) -> RequestState:
     response_text = response.content  # Extract text
 
     # Try extracting user profile data from the LLM response
-    try:
-        parsed = json.loads(response_text)
-        user_profile_update = parsed.get("user_profile", {})
-        
-        # Add validation for expected profile fields
-        if user_profile_update:
-            valid_fields = ["interests", "budget", "travel_style", "accessibility_needs", "pace"]
-            user_profile_update = {k: v for k, v in user_profile_update.items() if k in valid_fields}
-    except Exception:
-        user_profile_update = {}
+    user_profile_update = {}
+    
+    # Only attempt JSON parsing if the response looks like JSON
+    if response_text and response_text.strip().startswith('{') and response_text.strip().endswith('}'):
+        try:
+            parsed = json.loads(response_text)
+            user_profile_update = parsed.get("user_profile", {})
+            
+            # Add validation for expected profile fields
+            if user_profile_update:
+                valid_fields = ["interests", "budget", "travel_style", "accessibility_needs", "pace"]
+                user_profile_update = {k: v for k, v in user_profile_update.items() if k in valid_fields}
+        except json.JSONDecodeError:
+            # This is normal for conversational responses
+            pass
+        except Exception as e:
+            logger.debug(f"Error parsing profile data: {str(e)}")
 
     # Merge with existing profile, preserving existing values
     current_profile = state.get("user_profile", {})
@@ -341,7 +431,7 @@ def get_weather(state: RequestState) -> RequestState:
         response = requests.get(base_url, params=params)
         response.raise_for_status()
         weather_data = response.json()
-        logger.debug(f"WEATHER: Got response from OpenWeather: {str(weather_data)[:100]}...")
+        logger.debug(f"WEATHER: Got response from OpenWeather: {str(weather_data)}")
         
         # Format weather data for LLM
         weather_context = {
@@ -371,25 +461,32 @@ Please provide a helpful, conversational summary of this weather information for
 including appropriate clothing suggestions and activity recommendations based on these conditions.
 Keep your response concise and natural-sounding. Do not use JSON formatting in your response."""
 
-        logger.debug(f"WEATHER: Sending prompt to LLM: {weather_prompt_text[:100]}...")
+        logger.debug(f"WEATHER: Sending prompt to LLM: {weather_prompt_text}")
         
         # Use a single string prompt
         weather_summary = llm.invoke(weather_prompt_text)
         weather_text = weather_summary.content
         
-        logger.debug(f"WEATHER: Got summary from LLM: {weather_text[:100]}...")
+        logger.debug(f"WEATHER: Got summary from LLM: {weather_text}")
         
-        # HERE'S THE FIX - Create a properly formatted JSON response
-        # No need for the LLM to format as JSON, we'll do it ourselves
+        # Store both raw and formatted versions of the message
+        # 1. Save the raw unformatted text response (to be used directly in display)
+        raw_weather_text = weather_text.strip()
+        
+        # 2. Format as JSON for internal use (ensure proper escaping)
         summary_content = {
             "type": "weather_response",
-            "message": weather_text
+            "message": raw_weather_text
         }
         
-        # Convert to JSON string
-        json_content = json.dumps(summary_content)
-        logger.debug(f"WEATHER: Formatted JSON response: {json_content[:100]}...")
+        # Convert to JSON string with proper escaping to ensure it can be parsed later
+        json_content = json.dumps(summary_content, ensure_ascii=False)
+        logger.debug(f"WEATHER: Formatted JSON response: {json_content}")
         
+        # 3. Also store the raw text directly in state for emergency backup
+        weather_context["raw_weather_text"] = raw_weather_text
+        
+        # Add as assistant message
         msg = {
             "role": "assistant",
             "content": json_content
@@ -404,6 +501,7 @@ Keep your response concise and natural-sounding. Do not use JSON formatting in y
                     "content": message.get("content")
                 }
 
+        # Return the state with the updated messages, weather data, and explicit empty request
         return {
             **state,
             "messages": messages,
@@ -643,61 +741,134 @@ def log_interaction(data: Dict[Any, Any], interaction_type: str, user_messages=N
 def format_response_for_user(response_content: str) -> str:
     """Convert JSON response to human-readable format."""
     # For debugging
-    logger.debug(f"FORMAT: Input response content: {response_content[:100]}...")
+    logger.debug(f"FORMAT: Input response content: {response_content}")
     
     # Skip processing if empty
     if not response_content or response_content.strip() == "":
         return "No response available."
     
+    # Special case for weather responses specifically containing Baku or other common location info
+    if '"type": "weather_response"' in response_content and (
+        'weather in Baku' in response_content or 
+        'Temperature' in response_content or
+        'temperature' in response_content
+    ):
+        logger.debug("FORMAT: Detected specific weather_response format")
+        try:
+            # Special handling for weather response format
+            import re
+            # Pattern to extract just the message content
+            weather_pattern = r'"message":\s*"(.*?)(?:"\}|\",)'
+            weather_match = re.search(weather_pattern, response_content, re.DOTALL)
+            
+            if weather_match:
+                # Extract and clean the message text
+                weather_text = weather_match.group(1)
+                weather_text = weather_text.replace('\\n', '\n').replace('\\\"', '"').replace('\\\\', '\\')
+                logger.debug(f"FORMAT: Successfully extracted weather message with regex: {weather_text[:50]}...")
+                return weather_text
+        except Exception as e:
+            logger.debug(f"FORMAT: Error in special weather extraction: {str(e)}")
+            # Continue to other methods
+    
+    # Regular case for general weather responses
+    if '"type": "weather_response"' in response_content:
+        logger.debug("FORMAT: Detected weather_response format")
+        try:
+            # Direct JSON parse for weather response
+            response_dict = json.loads(response_content)
+            if response_dict.get("type") == "weather_response" and "message" in response_dict:
+                weather_msg = response_dict["message"]
+                logger.debug(f"FORMAT: Successfully extracted weather message: {weather_msg[:50]}...")
+                return weather_msg
+        except Exception as e:
+            logger.debug(f"FORMAT: Error parsing weather response JSON: {str(e)}")
+            # Continue to other parsing methods
+    
+    # Enhanced weather response handling - try for escaped quotes and line breaks
+    if response_content.find('"type"') >= 0 and response_content.find('"weather') >= 0:
+        logger.debug("FORMAT: Attempting alternate weather format parsing")
+        try:
+            # Clean up potential escape issues
+            cleaned = response_content.replace('\\"', '"').replace('\\n', '\n')
+            if cleaned.strip().startswith('{') and cleaned.strip().endswith('}'):
+                weather_data = json.loads(cleaned)
+                if "message" in weather_data:
+                    logger.debug(f"FORMAT: Successfully extracted weather message from cleaned JSON")
+                    return weather_data["message"]
+        except Exception as e:
+            logger.debug(f"FORMAT: Error in alternate weather parsing: {str(e)}")
+    
     # Handle potential encoding issues and extract from code blocks
     try:
         # Clean up code blocks if present
         if "```" in response_content:
+            logger.debug("FORMAT: Extracting from code blocks")
             parts = response_content.split("```")
             for i, part in enumerate(parts):
                 if i % 2 == 1:  # This is inside a code block
                     if part.strip().startswith("json"):
-                        response_content = part.replace("json", "", 1).strip()
+                        cleaned_part = part.replace("json", "", 1).strip()
+                        logger.debug(f"FORMAT: Found JSON code block: {cleaned_part[:50]}...")
+                        response_content = cleaned_part
                         break
         
-        # Try JSON parsing with multiple approaches
-        try:
-            # Direct JSON parse
-            response_dict = json.loads(response_content)
+        # Only attempt JSON parsing if content looks like JSON
+        if response_content.strip().startswith('{') and response_content.strip().endswith('}'):
+            try:
+                # Direct JSON parse
+                response_dict = json.loads(response_content)
+                logger.debug(f"FORMAT: Successfully parsed JSON: {str(response_dict.keys())}")
+                
+                # Check for weather_response format first
+                if response_dict.get("type") == "weather_response" and "message" in response_dict:
+                    return response_dict["message"]
+                
+                # Check for other standard fields
+                for field in ["message", "response", "content", "weather"]:
+                    if field in response_dict and isinstance(response_dict[field], str):
+                        logger.debug(f"FORMAT: Found field {field} with value {response_dict[field][:50]}...")
+                        return response_dict[field]
+                        
+                # If no standard field, return any string value
+                for key, value in response_dict.items():
+                    if isinstance(value, str) and len(value) > 5:
+                        logger.debug(f"FORMAT: Returning value from key {key}")
+                        return value
+                        
+            except json.JSONDecodeError as e:
+                # Not a valid JSON - proceed with regex or text as is
+                logger.debug(f"FORMAT: JSON decode error: {str(e)}")
+                pass
             
-            # Check for weather_response format first
-            if response_dict.get("type") == "weather_response" and "message" in response_dict:
-                return response_dict["message"]
-            
-            # Check for other standard fields
-            for field in ["message", "response", "content", "weather"]:
-                if field in response_dict and isinstance(response_dict[field], str):
-                    return response_dict[field]
-                    
-            # If no standard field, return any string value
-            for value in response_dict.values():
-                if isinstance(value, str) and len(value) > 5:
-                    return value
-                    
-        except json.JSONDecodeError:
-            # Try regex extraction if JSON parsing fails
+            # Try regex extraction if JSON parsing fails or if we didn't find a suitable field
             import re
             
             # Try to extract weather_response directly
             weather_pattern = r'"type"\s*:\s*"weather_response".*?"message"\s*:\s*"([^"]+)"'
             weather_match = re.search(weather_pattern, response_content, re.DOTALL)
             if weather_match:
-                return weather_match.group(1).replace('\\n', '\n').replace('\\', '')
+                extracted = weather_match.group(1).replace('\\n', '\n').replace('\\', '')
+                logger.debug(f"FORMAT: Extracted weather message using regex: {extracted[:50]}...")
+                return extracted
                 
             # Try to extract any message field
             message_pattern = r'"message"\s*:\s*"([^"]+)"'
             message_match = re.search(message_pattern, response_content, re.DOTALL)
             if message_match:
-                return message_match.group(1).replace('\\n', '\n').replace('\\', '')
+                extracted = message_match.group(1).replace('\\n', '\n').replace('\\', '')
+                logger.debug(f"FORMAT: Extracted generic message using regex: {extracted[:50]}...")
+                return extracted
+        else:
+            # Not in JSON format, just return the text as is
+            logger.debug("FORMAT: Content not in JSON format, returning as is")
+            return response_content
+    
     except Exception as e:
         logger.debug(f"FORMAT ERROR: {str(e)}")
     
     # Return as is if all else fails
+    logger.debug("FORMAT: Using fallback - returning content as is")
     return response_content
 
 def interactive_chat():
@@ -721,23 +892,38 @@ def interactive_chat():
         """Route to the appropriate node based on the request."""
         logger.debug(f"ROUTER: request={state.get('request')}, location={state.get('location')}")
         
+        # Check message content to help with debugging
+        if "messages" in state and state["messages"]:
+            last_messages = state["messages"][-3:] if len(state["messages"]) >= 3 else state["messages"]
+            for msg in last_messages:
+                if isinstance(msg, dict) and msg.get("role") == "assistant":
+                    content = msg.get("content", "")
+                    if content and len(content) > 0:
+                        content_preview = content[:50] + "..." if len(content) > 50 else content
+                        logger.debug(f"ROUTER: Last assistant message: {content_preview}")
+                        break
+        
         # Check if we've just come from the weather node (recommendation would be populated)
         if state.get("recommendation") and "current_weather" in state.get("recommendation", {}):
-            logger.debug(f"Weather data already in state, not routing back to weather")
+            logger.debug(f"ROUTER: Weather data already in state, not routing back to weather")
             return END
         
         # Only route to weather if we have an explicit request
         if state.get("request") and len(state["request"]) > 0:
             request_type = state["request"][0]
+            logger.debug(f"ROUTER: Processing request type: {request_type}")
             
             if request_type in ["get_weather", "weather"]:
                 if state.get("location"):
-                    logger.debug(f"Routing to weather with location: {state.get('location')}")
+                    logger.debug(f"ROUTER: Routing to weather with location: {state.get('location')}")
                     return "weather"
                 else:
-                    logger.debug("Weather request but no location found")
+                    logger.debug("ROUTER: Weather request but no location found")
             elif request_type == "find_events":
+                logger.debug(f"ROUTER: Routing to events")
                 return "events"
+        else:
+            logger.debug("ROUTER: No specific request found, ending processing")
         
         return END
     
@@ -752,12 +938,18 @@ def interactive_chat():
     with open("travel_agent_graph.mmd", "w") as f:
         f.write(mermaid_code)
 
-    # Set up logging
+    # Set up logging with no truncation
+    log_filename = f'travel_agent_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
     logging.basicConfig(
-        filename=f'travel_agent_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log',
+        filename=log_filename,
         level=logging.INFO,
         format='%(asctime)s - %(message)s'
     )
+    
+    # Ensure no truncation of log messages
+    for handler in logging.root.handlers:
+        if hasattr(handler, 'formatter') and handler.formatter:
+            handler.formatter._style._fmt = '%(asctime)s - %(message)s'
 
     print("\nWelcome to Travel AI Assistant! (Type 'quit' to exit)")
     print("-" * 50)
@@ -802,6 +994,15 @@ def interactive_chat():
             # Process through graph
             state = chat_graph.invoke(state, {"recursion_limit": 100})
             
+            # Debug dump of all messages to help diagnose issues
+            logger.debug("===== DEBUG DUMP OF ALL MESSAGES =====")
+            for i, msg in enumerate(state.get("messages", [])):
+                if isinstance(msg, dict):
+                    role = msg.get("role", "unknown")
+                    content_preview = msg.get("content", "")[:100] + "..." if msg.get("content") and len(msg.get("content", "")) > 100 else msg.get("content", "")
+                    logger.debug(f"Message {i} (role={role}): {content_preview}")
+            logger.debug("===== END DEBUG DUMP =====")
+            
             # Ensure user message role integrity is maintained after graph processing
             if "messages" in state:
                 # Fix all user messages by checking content against our stored list
@@ -822,61 +1023,165 @@ def interactive_chat():
             # Log the raw state
             log_interaction(state, "INTERNAL_STATE", user_messages)
             
-            # DIRECT APPROACH for displaying responses
-            displayed = False
+            # WEATHER DISPLAY LOGIC - Always check for and display weather first
+            displayed_weather = False
             
-            # If we have weather data in the state, prioritize displaying that
+            # Check if we just processed a weather request
             if state.get("recommendation") and "current_weather" in state.get("recommendation", {}):
-                # Find the proper weather response message (from API call)
-                for msg in list(reversed(state["messages"]))[:3]:  # Look at recent messages
-                    if isinstance(msg, dict) and "content" in msg:
-                        try:
-                            content_obj = json.loads(msg["content"])
-                            if content_obj.get("type") == "weather_response":
-                                weather_msg = content_obj.get("message", "")
-                                if weather_msg:
-                                    print(f"\nAssistant: {weather_msg}")
-                                    logger.debug(f"Displayed weather response: {weather_msg[:50]}...")
-                                    displayed = True
-                                    break
-                        except:
-                            continue
-            
-            # If no weather response was displayed, show most recent relevant message
-            if not displayed:
-                # First try to find assistant messages
-                for msg in reversed(state["messages"]):
+                # First look specifically for weather_response messages
+                weather_displayed = False
+                
+                # Print debug information for each message to diagnose the issue
+                logger.debug("Looking for weather response in messages...")
+                
+                for msg in state["messages"]:
                     if isinstance(msg, dict) and msg.get("role") == "assistant" and msg.get("content"):
                         content = msg.get("content", "").strip()
+                        logger.debug(f"Examining message: {content[:100]}...")
+                        
+                        # Check if this contains the weather response
+                        if '"type": "weather_response"' in content:
+                            logger.debug("Found a weather_response message!")
+                            try:
+                                # Parse the JSON directly
+                                weather_obj = json.loads(content)
+                                if weather_obj.get("type") == "weather_response" and weather_obj.get("message"):
+                                    weather_text = weather_obj.get("message")
+                                    print(f"\nAssistant: {weather_text}")
+                                    logger.debug(f"Successfully displayed LLM weather response: {weather_text[:50]}...")
+                                    displayed_weather = True
+                                    weather_displayed = True
+                                    break
+                            except Exception as e:
+                                logger.debug(f"Failed to parse weather JSON: {str(e)}")
+                
+                # If we still haven't displayed weather, use the recommendation data directly only if we couldn't parse the LLM response
+                if not weather_displayed:
+                    # Try using format_response_for_user as a fallback
+                    logger.debug("Trying alternate method for weather display...")
+                    for msg in state["messages"]:
+                        if isinstance(msg, dict) and msg.get("role") == "assistant" and msg.get("content"):
+                            content = msg.get("content", "").strip()
+                            
+                            # Try using the formatter
+                            try:
+                                formatted = format_response_for_user(content)
+                                # If the formatted text looks like a weather response, use it
+                                if "weather" in formatted.lower() or "temperature" in formatted.lower():
+                                    print(f"\nAssistant: {formatted}")
+                                    logger.debug(f"Displayed formatted weather response: {formatted[:50]}...")
+                                    displayed_weather = True
+                                    weather_displayed = True
+                                    break
+                            except Exception as e:
+                                logger.debug(f"Error formatting response: {str(e)}")
+                
+                # If we still haven't displayed weather, try using the raw weather text
+                if not weather_displayed and state.get("recommendation", {}).get("current_weather"):
+                    # First try to use the raw weather text we explicitly stored for this case
+                    if "raw_weather_text" in state["recommendation"]:
+                        raw_text = state["recommendation"]["raw_weather_text"]
+                        print(f"\nAssistant: {raw_text}")
+                        logger.debug(f"Displayed raw_weather_text directly from recommendation")
+                        displayed_weather = True
+                    else:
+                        # Use regex to extract the message text directly from the raw state
+                        raw_json = json.dumps(state)
+                        logger.debug("Searching for weather message in raw state...")
+                        
+                        # More robust regex pattern to match the entire message content
+                        weather_pattern = r'"type":\s*"weather_response".*?"message":\s*"(.*?)(?:"}|",)'
+                        weather_match = re.search(weather_pattern, raw_json, re.DOTALL)
+                        
+                        if weather_match:
+                            # We found the original LLM text!
+                            # Clean up the extracted text (replace escape sequences)
+                            weather_text = weather_match.group(1)
+                            weather_text = weather_text.replace('\\n', '\n').replace('\\\"', '"').replace('\\\\', '\\')
+                            
+                            print(f"\nAssistant: {weather_text}")
+                            logger.debug(f"Successfully extracted complete weather message from raw state")
+                            displayed_weather = True
+                        else:
+                            # Truly last resort - use the simple weather summary
+                            weather_data = state["recommendation"]["current_weather"]
+                            location = state["recommendation"]["location"]
+                            
+                            weather_text = (
+                                f"Currently in {location}: {weather_data['description']}. "
+                                f"Temperature: {weather_data['temperature']}°C (feels like {weather_data['feels_like']}°C). "
+                                f"Humidity: {weather_data['humidity']}%, Wind: {weather_data['wind_speed']} km/h."
+                            )
+                            
+                            print(f"\nAssistant: {weather_text}")
+                            logger.debug(f"Displayed fallback weather response from recommendation data")
+                            displayed_weather = True
+                
+                # If we displayed weather, show options and skip the regular message display
+                if displayed_weather:
+                    print("\nOptions: What would you like to do next? (Options: get_weather, find_events, find_places)")
+                    continue
+            
+            # REGULAR DISPLAY LOGIC - If no weather was displayed
+            displayed = False
+            
+            # First try to find assistant messages
+            for msg in reversed(state["messages"]):
+                if isinstance(msg, dict) and msg.get("role") == "assistant" and msg.get("content"):
+                    content = msg.get("content", "").strip()
+                    if content:
+                        formatted = format_response_for_user(content)
+                        print(f"\nAssistant: {formatted}")
+                        logger.debug(f"Displayed assistant message: {formatted[:50]}...")
+                        displayed = True
+                        break
+            
+            # If no assistant message, check for system messages (options)
+            if not displayed:
+                for msg in reversed(state["messages"]):
+                    if isinstance(msg, dict) and msg.get("role") == "system" and msg.get("content"):
+                        # Skip options messages as we display them separately
+                        if "would you like to do next" in msg.get("content", "").lower():
+                            continue
+                        
+                        # Show other system messages
+                        content = msg.get("content", "").strip()
                         if content:
-                            formatted = format_response_for_user(content)
-                            print(f"\nAssistant: {formatted}")
-                            logger.debug(f"Displayed assistant message: {formatted[:50]}...")
+                            print(f"\nSystem: {content}")
+                            logger.debug(f"Displayed system message: {content[:50]}...")
                             displayed = True
                             break
-                
-                # If no assistant message, check for system messages (options)
-                if not displayed:
-                    for msg in reversed(state["messages"]):
-                        if isinstance(msg, dict) and msg.get("role") == "system" and msg.get("content"):
-                            # Skip options messages as we display them separately
-                            if "would you like to do next" in msg.get("content", "").lower():
-                                continue
-                            
-                            # Show other system messages
-                            content = msg.get("content", "").strip()
-                            if content:
-                                print(f"\nSystem: {content}")
-                                logger.debug(f"Displayed system message: {content[:50]}...")
-                                displayed = True
-                                break
             
             # Fallback message if nothing else was displayed
             if not displayed:
-                print("\nAssistant: I'll help you with your travel plans. What would you like to know?")
+                # Check if we have weather data but failed to display it for some reason
+                if state.get("recommendation") and "current_weather" in state.get("recommendation", {}):
+                    # Create a simple fallback weather message from the recommendation data
+                    try:
+                        weather_data = state["recommendation"]["current_weather"]
+                        location = state["recommendation"]["location"]
+                        
+                        weather_text = (
+                            f"Currently in {location}: {weather_data['description']}. "
+                            f"Temperature: {weather_data['temperature']}°C (feels like {weather_data['feels_like']}°C). "
+                            f"Humidity: {weather_data['humidity']}%, Wind: {weather_data['wind_speed']} km/h."
+                        )
+                        
+                        print(f"\nAssistant: {weather_text}")
+                        logger.debug(f"Displayed emergency fallback weather response from recommendation data")
+                        displayed = True
+                        displayed_weather = True
+                    except Exception as e:
+                        logger.error(f"Failed to display emergency fallback weather: {str(e)}")
+                
+                # Only show the generic fallback if we don't have a weather response
+                if not displayed and not displayed_weather:
+                    print("\nAssistant: I'll help you with your travel plans. What would you like to know?")
             
-            # Always show options
-            print("\nOptions: What would you like to do next? (Options: get_weather, find_events, find_places)")
+            # Always show options at the end if we haven't displayed weather
+            if not displayed_weather:
+                options_msg = "What would you like to do next? (Options: get_weather, find_events, find_places)"
+                print(f"\nOptions: {options_msg}")
             
         except Exception as e:
             error_msg = f"Error during chat: {str(e)}"

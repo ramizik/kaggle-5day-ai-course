@@ -1,0 +1,6 @@
+2025-04-12 16:19:42,788 - Error during chat: log_interaction() takes from 1 to 2 positional arguments but 3 were given
+2025-04-12 16:19:42,788 - Traceback (most recent call last):
+  File "D:\Programming\kaggle\testing.py", line 880, in interactive_chat
+    log_interaction({"user_input": user_input}, "USER_INPUT", user_messages)
+TypeError: log_interaction() takes from 1 to 2 positional arguments but 3 were given
+

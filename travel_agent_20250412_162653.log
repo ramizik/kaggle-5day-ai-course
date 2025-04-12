@@ -1,0 +1,74 @@
+2025-04-12 16:26:53,235 - INFO - === Starting Travel Agent Session ===
+2025-04-12 16:26:59,510 - USER_INPUT: {
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is the weather like in Baku, Azerbaijan?"
+    }
+  ]
+}
+2025-04-12 16:27:00,139 - Raw LLM response: ```json
+{"type": "weather_query", "location": "Baku, Azerbaijan"}
+```
+2025-04-12 16:27:00,139 - Weather-related text found in response
+2025-04-12 16:27:00,140 - Found location with pattern "location"\s*:\s*"([^"]+)": Baku, Azerbaijan
+2025-04-12 16:27:00,140 - Setting location to Baku, Azerbaijan and routing to weather
+2025-04-12 16:27:00,141 - ROUTER: request=['get_weather'], location=Baku, Azerbaijan
+2025-04-12 16:27:00,141 - ROUTER: Processing request type: get_weather
+2025-04-12 16:27:00,142 - ROUTER: Routing to weather with location: Baku, Azerbaijan
+2025-04-12 16:27:00,142 - WEATHER: Getting weather for location: Baku, Azerbaijan
+2025-04-12 16:27:00,143 - WEATHER: Making API call to OpenWeather with params: {'q': 'Baku, Azerbaijan', 'appid': '5306b1b9e7296497b4754486187b7ce4', 'units': 'metric'}
+2025-04-12 16:27:00,146 - Starting new HTTP connection (1): api.openweathermap.org:80
+2025-04-12 16:27:00,246 - http://api.openweathermap.org:80 "GET /data/2.5/weather?q=Baku%2C+Azerbaijan&appid=5306b1b9e7296497b4754486187b7ce4&units=metric HTTP/1.1" 200 513
+2025-04-12 16:27:00,247 - WEATHER: Got response from OpenWeather: {'coord': {'lon': 49.892, 'lat': 40.3777}, 'weather': [{'id': 803, 'main': 'Clouds', 'description': 'broken clouds', 'icon': '04n'}], 'base': 'stations', 'main': {'temp': 10.03, 'feels_like': 9.2, 'temp_min': 10.03, 'temp_max': 10.03, 'pressure': 1013, 'humidity': 81, 'sea_level': 1013, 'grnd_level': 1012}, 'visibility': 10000, 'wind': {'speed': 10.29, 'deg': 330, 'gust': 15.43}, 'clouds': {'all': 75}, 'dt': 1744500105, 'sys': {'type': 1, 'id': 8841, 'country': 'AZ', 'sunrise': 1744509906, 'sunset': 1744557383}, 'timezone': 14400, 'id': 587084, 'name': 'Baku', 'cod': 200}
+2025-04-12 16:27:00,247 - WEATHER: Formatted weather context: {"location": "Baku, Azerbaijan", "current_weather": {"description": "broken clouds", "temperature": 10, "feels_like": 9, "humidity": 81, "wind_speed": 37, "clouds": 75}}
+2025-04-12 16:27:00,248 - WEATHER: Sending prompt to LLM: You are a helpful travel assistant. 
+Here is the current weather data for Baku, Azerbaijan:
+Description: broken clouds
+Temperature: 10°C (feels like 9°C)
+Humidity: 81%
+Wind Speed: 37 km/h
+Cloud Cover: 75%
+
+Please provide a helpful, conversational summary of this weather information for a traveler, 
+including appropriate clothing suggestions and activity recommendations based on these conditions.
+Keep your response concise and natural-sounding. Do not use JSON formatting in your response.
+2025-04-12 16:27:01,553 - WEATHER: Got summary from LLM: Okay, so the weather in Baku is a bit chilly today. It's 10°C, but feels more like 9°C. Expect broken clouds and fairly strong winds at 37 km/h. Humidity is also quite high at 81%, so it might feel a bit damp.
+
+I'd recommend dressing warmly. Definitely wear a jacket, preferably windproof, and maybe a sweater underneath. A scarf might be a good idea too!
+
+Given the wind and clouds, maybe skip any boat trips today. Indoor activities like visiting museums (the Carpet Museum is great!) or exploring the Old City would be perfect. If you do venture outdoors, be prepared for a bit of a blustery walk!
+2025-04-12 16:27:01,554 - WEATHER: Formatted JSON response: {"type": "weather_response", "message": "Okay, so the weather in Baku is a bit chilly today. It's 10°C, but feels more like 9°C. Expect broken clouds and fairly strong winds at 37 km/h. Humidity is also quite high at 81%, so it might feel a bit damp.\n\nI'd recommend dressing warmly. Definitely wear a jacket, preferably windproof, and maybe a sweater underneath. A scarf might be a good idea too!\n\nGiven the wind and clouds, maybe skip any boat trips today. Indoor activities like visiting museums (the Carpet Museum is great!) or exploring the Old City would be perfect. If you do venture outdoors, be prepared for a bit of a blustery walk!"}
+2025-04-12 16:27:01,555 - Chatbot detected we just processed weather, returning without additional prompts
+2025-04-12 16:27:01,555 - ROUTER: request=[], location=Baku, Azerbaijan
+2025-04-12 16:27:01,555 - ROUTER: Weather data already in state, not routing back to weather
+2025-04-12 16:27:01,556 - ===== DEBUG DUMP OF ALL MESSAGES =====
+2025-04-12 16:27:01,556 - ===== END DEBUG DUMP =====
+2025-04-12 16:27:01,557 - INTERNAL_STATE: {
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is the weather like in Baku, Azerbaijan?"
+    },
+    {
+      "role": "assistant",
+      "content": "{\"type\": \"weather_response\", \"message\": \"Okay, so the weather in Baku is a bit chilly today. It's 10\u00b0C, but feels more like 9\u00b0C. Expect broken clouds and fairly strong winds at 37 km/h. Humidity is also quite high at 81%, so it might feel a bit damp.\\n\\nI'd recommend dressing warmly. Definitely wear a jacket, preferably windproof, and maybe a sweater underneath. A scarf might be a good idea too!\\n\\nGiven the wind and clouds, maybe skip any boat trips today. Indoor activities like visiting museums (the Carpet Museum is great!) or exploring the Old City would be perfect. If you do venture outdoors, be prepared for a bit of a blustery walk!\"}"
+    }
+  ],
+  "request": [],
+  "finished": false,
+  "user_profile": {},
+  "location": "Baku, Azerbaijan",
+  "recommendation": {
+    "location": "Baku, Azerbaijan",
+    "current_weather": {
+      "description": "broken clouds",
+      "temperature": 10,
+      "feels_like": 9,
+      "humidity": 81,
+      "wind_speed": 37,
+      "clouds": 75
+    }
+  }
+}
+2025-04-12 16:27:01,557 - Displayed fallback weather response from recommendation data
