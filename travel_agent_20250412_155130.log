@@ -1,0 +1,62 @@
+2025-04-12 15:51:30,505 - INFO - === Starting Travel Agent Session ===
+2025-04-12 15:51:36,805 - INFO - USER_INPUT: {
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is the weather like in Baku, Azerbaijan?"
+    }
+  ]
+}
+2025-04-12 15:51:37,670 - DEBUG - Raw LLM response: ```json
+{"type": "weather_report", "location": "Baku, Azerbaijan", "weather": "Sunny", "temperature"...
+2025-04-12 15:51:37,670 - DEBUG - Weather-related text found in response
+2025-04-12 15:51:37,670 - DEBUG - Found location with pattern "location"\s*:\s*"([^"]+)": Baku, Azerbaijan
+2025-04-12 15:51:37,671 - DEBUG - Setting location to Baku, Azerbaijan and routing to weather
+2025-04-12 15:51:37,671 - DEBUG - ROUTER: request=['get_weather'], location=Baku, Azerbaijan
+2025-04-12 15:51:37,672 - DEBUG - Routing to weather with location: Baku, Azerbaijan
+2025-04-12 15:51:37,673 - DEBUG - WEATHER: Getting weather for location: Baku, Azerbaijan
+2025-04-12 15:51:37,673 - DEBUG - WEATHER: Making API call to OpenWeather with params: {'q': 'Baku, Azerbaijan', 'appid': '5306b1b9e7296497b4754486187b7ce4', 'units': 'metric'}
+2025-04-12 15:51:37,676 - DEBUG - Starting new HTTP connection (1): api.openweathermap.org:80
+2025-04-12 15:51:37,782 - DEBUG - http://api.openweathermap.org:80 "GET /data/2.5/weather?q=Baku%2C+Azerbaijan&appid=5306b1b9e7296497b4754486187b7ce4&units=metric HTTP/1.1" 200 513
+2025-04-12 15:51:37,783 - DEBUG - WEATHER: Got response from OpenWeather: {'coord': {'lon': 49.892, 'lat': 40.3777}, 'weather': [{'id': 803, 'main': 'Clouds', 'description': ...
+2025-04-12 15:51:37,783 - DEBUG - WEATHER: Formatted weather context: {"location": "Baku, Azerbaijan", "current_weather": {"description": "broken clouds", "temperature": 10, "feels_like": 9, "humidity": 81, "wind_speed": 41, "clouds": 75}}
+2025-04-12 15:51:37,783 - DEBUG - WEATHER: Sending prompt to LLM: You are a helpful travel assistant. 
+Here is the current weather data for Baku, Azerbaijan:
+Descript...
+2025-04-12 15:51:39,050 - DEBUG - WEATHER: Got summary from LLM: Okay, here's the weather for Baku: It's 10 degrees Celsius, but feels like 9, with broken clouds. Ex...
+2025-04-12 15:51:39,050 - DEBUG - WEATHER: Formatted JSON response: {"type": "weather_response", "message": "Okay, here's the weather for Baku: It's 10 degrees Celsius,...
+2025-04-12 15:51:39,464 - DEBUG - Raw LLM response: ...
+2025-04-12 15:51:39,464 - DEBUG - JSON decode error in main parsing
+2025-04-12 15:51:39,465 - DEBUG - ROUTER: request=[], location=Baku, Azerbaijan
+2025-04-12 15:51:39,465 - DEBUG - Weather data already in state, not routing back to weather
+2025-04-12 15:51:39,466 - INFO - INTERNAL_STATE: {
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is the weather like in Baku, Azerbaijan?"
+    },
+    {
+      "role": "assistant",
+      "content": "{\"type\": \"weather_response\", \"message\": \"Okay, here's the weather for Baku: It's 10 degrees Celsius, but feels like 9, with broken clouds. Expect it to be a bit breezy with a wind speed of 41 km/h and high humidity at 81%. There's also quite a bit of cloud cover (75%).\\n\\nBasically, you'll want to dress warmly! A jacket, sweater, or layers are a must. Given the wind, a windbreaker would be a good idea, and maybe a scarf.\\n\\nFor activities, indoor options might be best, like visiting museums or enjoying Baku's cafes. If you're planning to be outside, be prepared for the wind and cooler temperatures. Even with the cloud cover, it might be worth packing sunglasses. Have a great trip!\"}"
+    },
+    {
+      "role": "assistant",
+      "content": "What would you like to do next? (Options: get_weather, find_events, find_places)"
+    }
+  ],
+  "request": [],
+  "finished": false,
+  "user_profile": {},
+  "location": "Baku, Azerbaijan",
+  "recommendation": {
+    "location": "Baku, Azerbaijan",
+    "current_weather": {
+      "description": "broken clouds",
+      "temperature": 10,
+      "feels_like": 9,
+      "humidity": 81,
+      "wind_speed": 41,
+      "clouds": 75
+    }
+  }
+}
